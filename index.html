@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Chess vs Deep Learning</title>
+    <style>
+        :root{ --bg:#12151b; --panel:#1a1e26; --line:#2c3644; --text:#dde5ef; --accent:#6ea8fe; --sq-light:#eeeed2; --sq-dark:#769656; }
+        *{box-sizing:border-box} 
+        
+        /* FIXED: Lock the page height and prevent the body from growing */
+        body {
+            margin: 0; 
+            background: var(--bg); 
+            color: var(--text); 
+            font-family: system-ui, sans-serif; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            overflow: hidden; 
+        }
+        
+        /* FIXED: Constrain the main container */
+        .container {
+            display: flex; 
+            gap: 24px; 
+            padding: 20px; 
+            max-width: 1000px; 
+            width: 100%; 
+            height: 100%; 
+            max-height: 100vh;
+        }
+        
+        #board {
+            width: min(75vh, 100%, 600px); 
+            aspect-ratio: 1/1; 
+            display: grid; 
+            grid-template-columns: repeat(8, 1fr); 
+            grid-template-rows: repeat(8, 1fr); 
+            border-radius: 8px; 
+            overflow: hidden; 
+            box-shadow: 0 10px 30px rgba(0,0,0,.5); 
+            --sq: 60px;
+            align-self: center;
+        }
+        
+        .sq { position: relative; display: flex; align-items: center; justify-content: center; user-select: none; cursor: pointer; }
+        .sq.light { background: var(--sq-light); } 
+        .sq.dark { background: var(--sq-dark); }
+        .sq.sel::before { content: ""; position: absolute; inset: 0; background: rgba(60,150,255,.5); }
+        
+        /* Last move highlight */
+        .sq.last::before { content: ""; position: absolute; inset: 0; background: rgba(255,214,0,.4); }
+        
+        .sq.check::before { content: ""; position: absolute; inset: 0; background: rgba(255, 0, 0, 0.6); box-shadow: inset 0 0 15px red; }
+        
+        .sq.target::after { content: ""; position: absolute; width: 30%; height: 30%; border-radius: 50%; background: rgba(15,20,25,.3); pointer-events: none; }
+        .sq.target.capture::after { width: 90%; height: 90%; background: transparent; border-radius: 50%; border: calc(var(--sq) * .07) solid rgba(15,20,25,.3); }
+        
+        .piece { font-size: calc(var(--sq) * .78); line-height: 1; pointer-events: none; position: relative; z-index: 2; font-family: "DejaVu Sans", "Segoe UI Symbol", sans-serif; }
+        .piece.w { color: #fff; -webkit-text-stroke: calc(var(--sq)*.028) #23272e; } 
+        .piece.b { color: #23272e; -webkit-text-stroke: calc(var(--sq)*.022) #0c0f13; }
+        
+        .coord { position: absolute; font-size: calc(var(--sq) * .2); font-weight: 600; opacity: .75; pointer-events: none; z-index: 3; }
+        .coord.rank { top: 3%; left: 5%; }
+        .coord.file { bottom: 3%; right: 6%; }
+        .sq.light .coord { color: #6b7f4b; }
+        .sq.dark .coord { color: #e6ecd4; }
+
+        /* FIXED: Constrain the right panel */
+        .panel {
+            flex: 1; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 16px; 
+            min-width: 320px;
+            height: 100%;
+            max-height: 100vh;
+            overflow: hidden;
+        }
+        
+        h1 { margin: 0; font-size: 22px; color: var(--accent); }
+        .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+        .stat { font-family: monospace; font-size: 13px; color: #8b98a9; margin-bottom: 8px; display: flex; justify-content: space-between; }
+        .stat span { color: var(--text); }
+        #statusMsg { color: #f85149; font-weight: bold; text-align: center; margin-top: 10px; min-height: 20px; font-size: 16px; }
+        button { background: var(--accent); color: #000; border: none; padding: 10px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+        
+        /* FIXED: The History box must flex to fill remaining space, and its inner div must scroll */
+        .history-box {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0; /* CRITICAL: allows flex child to shrink and scroll */
+        }
+        .history {
+            flex: 1;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 13px;
+            color: #8b98a9;
+            min-height: 0;
+        }
+
+        /* Player Toggle */
+        .player-toggle { display: flex; gap: 10px; margin-bottom: 10px; }
+        .player-toggle button { flex: 1; background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+        .player-toggle button.active { background: var(--accent); color: #000; font-weight: bold; }
+
+        #promoModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); justify-content: center; align-items: center; z-index: 100; }
+        #promoModal .content { background: var(--panel); padding: 20px; border-radius: 10px; text-align: center; border: 1px solid var(--accent); }
+        #promoModal button { margin: 5px; font-size: 30px; width: 60px; height: 60px; }
+
+        /* Floating Brain Controls */
+        .brain-controls { position: fixed; bottom: 24px; left: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }
+        .control-btn { background: var(--panel); color: var(--text); border: 1px solid var(--line); padding: 10px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; transition: 0.2s; text-align: left; }
+        .control-btn:hover { background: var(--panel2); border-color: var(--accent); }
+        .control-btn.danger { color: #f85149; border-color: rgba(248, 81, 73, 0.5); }
+        .control-btn.danger:hover { background: rgba(248, 81, 73, 0.15); border-color: #f85149; }
+
+        /* Mobile Responsiveness */
+        @media (max-width: 850px) {
+            body { height: auto; overflow: auto; display: block; padding: 10px; }
+            .container { flex-direction: column; align-items: center; height: auto; padding: 0; }
+            .panel { width: 100%; min-width: unset; height: auto; max-height: none; }
+            #board { width: 95vw; max-width: 95vw; margin-bottom: 15px; }
+            .history-box { height: 200px; flex: none; } /* Fixed height on mobile so it doesn't collapse */
+            .brain-controls { position: static; flex-direction: row; flex-wrap: wrap; justify-content: center; margin-top: 15px; }
+        }
+    </style>
+</head>
+<body>
+<div id="promoModal">
+    <div class="content">
+        <h3>Promote Pawn</h3>
+        <button onclick="setPromotion(5)">♕</button>
+        <button onclick="setPromotion(4)">♖</button>
+        <button onclick="setPromotion(3)">♗</button>
+        <button onclick="setPromotion(2)">♘</button>
+    </div>
+</div>
+
+<div class="container">
+    <div id="board"></div>
+    <div class="panel">
+        <h1>Full Chess Engine</h1>
+        
+        <div class="box">
+            <h3>Play As</h3>
+            <div class="player-toggle">
+                <button id="btnW" class="active" onclick="setPlayerColor('w')">White</button>
+                <button id="btnB" onclick="setPlayerColor('b')">Black</button>
+            </div>
+        </div>
+
+        <div class="box">
+            <div class="stat">Engine Status: <span id="engineStatus">Loading...</span></div>
+            <div class="stat">Positions Examined: <span id="engineNodes">0</span></div>
+            <div class="stat">Moves Learned: <span id="statMoves">0</span></div>
+            <div class="stat">Games Played: <span id="statGames">0</span></div>
+            <div id="statusMsg"></div>
+        </div>
+        
+        <!-- FIXED: Added class "history-box" -->
+        <div class="box history-box">
+            <h3>Move History</h3>
+            <div class="history" id="history"></div>
+            <button onclick="resetGame()" style="width:100%; margin-top:10px; flex-shrink: 0;">New Game</button>
+        </div>
+    </div>
+</div>
+
+<!-- Brain Management Controls -->
+<div class="brain-controls">
+    <button onclick="downloadBrain()" class="control-btn">⏬ Download Brain</button>
+    <button onclick="triggerUpload()" class="control-btn">⏫ Upload Brain</button>
+    <button onclick="wipeBrain()" class="control-btn danger">⚠️ Wipe Brain</button>
+</div>
+
+<!-- Hidden file input for uploading -->
+<input type="file" id="brainUpload" accept=".bin" style="display: none;" onchange="handleFileUpload(event)">
+
+<script src="chess.js"></script>
+<script>
+    const GLYPH = { 1:"♙", 2:"♘", 3:"♗", 4:"♖", 5:"♕", 6:"♔", 7:"♟", 8:"♞", 9:"♝", 10:"♜", 11:"♛", 12:"♚" };
+    let Module = null;
+    let board = new Int32Array(64).fill(0);
+    let castling = "KQkq";
+    let ep = -1;
+    let selectedSq = null;
+    let legalTargets = [];
+    let history = [];
+    let pendingPromo = null;
+    let gameOver = false; 
+    let playerColor = "w";
+    let lastMove = { from: -1, to: -1 };
+
+    // Stats Tracking
+    let totalMoves = parseInt(localStorage.getItem('chess_stats_moves') || '0');
+    let totalGames = parseInt(localStorage.getItem('chess_stats_games') || '0');
+
+    function updateStats() {
+        document.getElementById("statMoves").textContent = totalMoves.toLocaleString();
+        document.getElementById("statGames").textContent = totalGames.toLocaleString();
+        localStorage.setItem('chess_stats_moves', totalMoves);
+        localStorage.setItem('chess_stats_games', totalGames);
+    }
+
+    function toSquare(i) { return String.fromCharCode(97 + (i % 8)) + (8 - Math.floor(i / 8)); }
+
+    function initBoard() {
+        board.fill(0);
+        board[0]=10; board[1]=8; board[2]=9; board[3]=11; board[4]=12; board[5]=9; board[6]=8; board[7]=10;
+        for(let i=8; i<16; i++) board[i] = 7; 
+        for(let i=48; i<56; i++) board[i] = 1; 
+        board[56]=4; board[57]=2; board[58]=3; board[59]=5; board[60]=6; board[61]=3; board[62]=2; board[63]=4;
+        castling = "KQkq";
+        ep = -1;
+        lastMove = { from: -1, to: -1 };
+    }
+
+    function encodeMove(from, to, promo = 0, flag = 0) { return from | (to << 6) | (promo << 12) | (flag << 15); }
+
+    function isAttacked(b, sq, byWhite) {
+        const r = Math.floor(sq / 8), c = sq % 8;
+        const pDir = byWhite ? 1 : -1;
+        if (c > 0 && r + pDir >= 0 && r + pDir < 8 && b[(r + pDir) * 8 + (c - 1)] === (byWhite ? 1 : 7)) return true;
+        if (c < 7 && r + pDir >= 0 && r + pDir < 8 && b[(r + pDir) * 8 + (c + 1)] === (byWhite ? 1 : 7)) return true;
+        
+        const knOffs = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
+        for (const [dr, dc] of knOffs) {
+            const nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && b[nr * 8 + nc] === (byWhite ? 2 : 8)) return true;
+        }
+        const kingOffs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+        for (const [dr, dc] of kingOffs) {
+            const nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && b[nr * 8 + nc] === (byWhite ? 6 : 12)) return true;
+        }
+        const dirs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+        for (const [dr, dc] of dirs) {
+            let nr = r + dr, nc = c + dc;
+            while (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+                const p = b[nr * 8 + nc];
+                if (p !== 0) {
+                    const type = (p - 1) % 6;
+                    const isEnemy = byWhite ? (p <= 6) : (p > 6);
+                    if (isEnemy) {
+                        if (type === 2 && Math.abs(dr) === 1 && Math.abs(dc) === 1) return true;
+                        if (type === 3 && (dr === 0 || dc === 0)) return true;
+                        if (type === 4) return true;
+                    }
+                    break;
+                }
+                nr += dr; nc += dc;
+            }
+        }
+        return false;
+    }
+
+    function isInCheck(b, isWhite) {
+        let kingSq = -1;
+        for (let i = 0; i < 64; i++) {
+            if (b[i] === (isWhite ? 6 : 12)) { kingSq = i; break; }
+        }
+        if (kingSq === -1) return false;
+        return isAttacked(b, kingSq, !isWhite);
+    }
+
+    function getLegalMoves(from) {
+        const pseudoMoves = [];
+        const piece = board[from];
+        if (piece === 0) return pseudoMoves;
+        
+        const isWhite = piece <= 6;
+        if (playerColor === "w" && !isWhite) return pseudoMoves;
+        if (playerColor === "b" && isWhite) return pseudoMoves;
+
+        const r = Math.floor(from / 8), c = from % 8;
+        const type = isWhite ? piece : piece - 6;
+
+        const add = (to, promo = 0, flag = 0) => {
+            if (to >= 0 && to < 64) {
+                const t = board[to];
+                if (t === 0 || (isWhite ? t > 6 : t <= 6)) pseudoMoves.push(encodeMove(from, to, promo, flag));
+            }
+        };
+
+        if (type === 1) {
+            const dir = isWhite ? -1 : 1;
+            const promoRank = isWhite ? 0 : 7;
+            if (r + dir >= 0 && r + dir < 8 && board[from + dir * 8] === 0) {
+                if (r + dir === promoRank) { for (let pr = 2; pr <= 5; pr++) add(from + dir * 8, pr); }
+                else {
+                    add(from + dir * 8);
+                    if ((isWhite && r === 6) || (!isWhite && r === 1) && board[from + dir * 16] === 0) add(from + dir * 16);
+                }
+            }
+            for (const dc of [-1, 1]) {
+                const nc = c + dc, nr = r + dir;
+                if (nc >= 0 && nc < 8 && nr >= 0 && nr < 8) {
+                    const to = nr * 8 + nc;
+                    if (isWhite ? board[to] >= 7 : (board[to] > 0 && board[to] <= 6)) {
+                        if (nr === promoRank) { for (let pr = 2; pr <= 5; pr++) add(to, pr); }
+                        else add(to);
+                    } else if (board[to] === 0 && to === ep) {
+                        add(to, 0, 1); 
+                    }
+                }
+            }
+        } else if (type === 2) {
+            const offs = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
+            for (const [dr, dc] of offs) {
+                const nr = r + dr, nc = c + dc;
+                if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) add(nr * 8 + nc);
+            }
+        } else if (type === 3 || type === 4 || type === 5) {
+            const dirs = type === 3 ? [[-1,-1],[-1,1],[1,-1],[1,1]] :
+                         type === 4 ? [[-1,0],[1,0],[0,-1],[0,1]] :
+                         [[-1,-1],[-1,1],[1,-1],[1,1],[-1,0],[1,0],[0,-1],[0,1]];
+            for (const [dr, dc] of dirs) {
+                let nr = r + dr, nc = c + dc;
+                while (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+                    const to = nr * 8 + nc;
+                    if (board[to] === 0) add(to);
+                    else { if (isWhite ? board[to] >= 7 : (board[to] > 0 && board[to] <= 6)) add(to); break; }
+                    nr += dr; nc += dc;
+                }
+            }
+        } else if (type === 6) {
+            const offs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+            for (const [dr, dc] of offs) {
+                const nr = r + dr, nc = c + dc;
+                if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) add(nr * 8 + nc);
+            }
+            if (isWhite && from === 60) {
+                if (castling.includes("K") && board[61] === 0 && board[62] === 0 && board[63] === 4) {
+                    if (!isAttacked(board, 60, false) && !isAttacked(board, 61, false) && !isAttacked(board, 62, false)) add(62, 0, 2);
+                }
+                if (castling.includes("Q") && board[59] === 0 && board[58] === 0 && board[57] === 0 && board[56] === 4) {
+                    if (!isAttacked(board, 60, false) && !isAttacked(board, 59, false) && !isAttacked(board, 58, false)) add(58, 0, 2);
+                }
+            } else if (!isWhite && from === 4) {
+                if (castling.includes("k") && board[5] === 0 && board[6] === 0 && board[7] === 10) {
+                    if (!isAttacked(board, 4, true) && !isAttacked(board, 5, true) && !isAttacked(board, 6, true)) add(6, 0, 2);
+                }
+                if (castling.includes("q") && board[3] === 0 && board[2] === 0 && board[1] === 0 && board[0] === 10) {
+                    if (!isAttacked(board, 4, true) && !isAttacked(board, 3, true) && !isAttacked(board, 2, true)) add(2, 0, 2);
+                }
+            }
+        }
+
+        const legal = [];
+        for (const m of pseudoMoves) {
+            const fromSq = m & 63;
+            const toSq = (m >> 6) & 63;
+            const promo = (m >> 12) & 7;
+            const flag = (m >> 15) & 3;
+            
+            const temp = new Int32Array(board);
+            if (flag === 1) temp[isWhite ? toSq + 8 : toSq - 8] = 0;
+            if (flag === 2) {
+                if (toSq === 62) { temp[61] = temp[63]; temp[63] = 0; }
+                if (toSq === 58) { temp[59] = temp[56]; temp[56] = 0; }
+                if (toSq === 6) { temp[5] = temp[7]; temp[7] = 0; }
+                if (toSq === 2) { temp[3] = temp[0]; temp[0] = 0; }
+            }
+            temp[toSq] = promo > 0 ? (isWhite ? promo : promo + 6) : temp[fromSq];
+            temp[fromSq] = 0;
+
+            if (!isInCheck(temp, isWhite)) legal.push(m);
+        }
+        return legal;
+    }
+
+    function makeMove(m) {
+        const from = m & 63;
+        const to = (m >> 6) & 63;
+        const promo = (m >> 12) & 7;
+        const flag = (m >> 15) & 3;
+        const movingPiece = board[from];
+        const isWhite = movingPiece <= 6;
+        
+        if (movingPiece === 6) castling = castling.replace("K", "").replace("Q", "");
+        if (movingPiece === 12) castling = castling.replace("k", "").replace("q", "");
+        if (from === 63 || to === 63) castling = castling.replace("K", "");
+        if (from === 56 || to === 56) castling = castling.replace("Q", "");
+        if (from === 7 || to === 7) castling = castling.replace("k", "");
+        if (from === 0 || to === 0) castling = castling.replace("q", "");
+
+        if (Math.abs(to - from) === 16) ep = (from + to) / 2;
+        else ep = -1;
+
+        if (flag === 1) board[to + (isWhite ? 8 : -8)] = 0;
+        if (flag === 2) {
+            if (to === 62) { board[61] = board[63]; board[63] = 0; }
+            if (to === 58) { board[59] = board[56]; board[56] = 0; }
+            if (to === 6) { board[5] = board[7]; board[7] = 0; }
+            if (to === 2) { board[3] = board[0]; board[0] = 0; }
+        }
+        
+        board[to] = promo > 0 ? (isWhite ? promo : promo + 6) : movingPiece;
+        board[from] = 0;
+        lastMove = { from: from, to: to };
+    }
+
+    const boardEl = document.getElementById("board");
+    function render() {
+        boardEl.innerHTML = "";
+        const flipped = (playerColor === "b");
+        const whiteInCheck = isInCheck(board, true);
+        const blackInCheck = isInCheck(board, false);
+
+        for (let vr = 0; vr < 8; vr++) {
+            for (let vc = 0; vc < 8; vc++) {
+                const r = flipped ? 7 - vr : vr;
+                const c = flipped ? 7 - vc : vc;
+                const i = r * 8 + c;
+
+                const sq = document.createElement("div");
+                sq.className = "sq " + ((r+c) % 2 === 0 ? "light" : "dark");
+                if (selectedSq === i) sq.classList.add("sel");
+                if (legalTargets.some(m => ((m >> 6) & 63) === i)) {
+                    sq.classList.add("target");
+                    if (board[i] !== 0) sq.classList.add("capture");
+                }
+                if ((whiteInCheck && board[i] === 6) || (blackInCheck && board[i] === 12)) {
+                    sq.classList.add("check");
+                }
+                if (lastMove.from === i || lastMove.to === i) {
+                    sq.classList.add("last");
+                }
+
+                if (board[i] > 0) {
+                    const span = document.createElement("span");
+                    span.className = "piece " + (board[i] <= 6 ? "w" : "b");
+                    span.textContent = GLYPH[board[i]];
+                    sq.appendChild(span);
+                }
+
+                if (vc === 0) {
+                    const coord = document.createElement("span");
+                    coord.className = "coord rank";
+                    coord.textContent = 8 - r;
+                    sq.appendChild(coord);
+                }
+                if (vr === 7) {
+                    const coord = document.createElement("span");
+                    coord.className = "coord file";
+                    coord.textContent = String.fromCharCode(97 + c);
+                    sq.appendChild(coord);
+                }
+
+                sq.onclick = () => handleClick(i);
+                boardEl.appendChild(sq);
+            }
+        }
+        
+        let histHtml = "";
+        for (let i = 0; i < history.length; i += 2) {
+            histHtml += `<div>${Math.floor(i/2)+1}. ${history[i]} ${history[i+1] || ""}</div>`;
+        }
+        const historyDiv = document.getElementById("history");
+        historyDiv.innerHTML = histHtml;
+        historyDiv.scrollTop = historyDiv.scrollHeight; // FIXED: Auto-scroll to bottom
+
+        const msgEl = document.getElementById("statusMsg");
+        if (gameOver) return;
+        if (whiteInCheck) msgEl.textContent = "⚠️ White is in check!";
+        else if (blackInCheck) msgEl.textContent = "🔥 Black is in check!";
+        else msgEl.textContent = "";
+    }
+
+    function handleClick(i) {
+        if (gameOver) return;
+        const targetMove = legalTargets.find(m => ((m >> 6) & 63) === i);
+        if (selectedSq !== null && targetMove) {
+            const promo = (targetMove >> 12) & 7;
+            if (promo > 0) {
+                pendingPromo = { from: selectedSq, to: i };
+                document.getElementById("promoModal").style.display = "flex";
+                return;
+            }
+            executeHumanMove(targetMove);
+            return;
+        }
+        
+        if (playerColor === "w" && board[i] > 6) return;
+        if (playerColor === "b" && board[i] <= 6 && board[i] !== 0) return;
+        
+        if (selectedSq === i) { selectedSq = null; legalTargets = []; render(); return; }
+        if (board[i] !== 0) {
+            selectedSq = i;
+            legalTargets = getLegalMoves(i);
+            render();
+        }
+    }
+
+    window.setPromotion = function(piece) {
+        document.getElementById("promoModal").style.display = "none";
+        if (pendingPromo) {
+            const move = encodeMove(pendingPromo.from, pendingPromo.to, piece);
+            executeHumanMove(move);
+            pendingPromo = null;
+        }
+    };
+
+    function executeHumanMove(move) {
+        if (gameOver) return;
+        try {
+            const cppBoard = new Module.VectorInt();
+            for(let i = 0; i < 64; i++) cppBoard.push_back(board[i]);
+            Module.trainNetwork(cppBoard, move & 63, (move >> 6) & 63, 0.05);
+            cppBoard.delete();
+
+            totalMoves++;
+            updateStats();
+
+            // --- SAVE THE BRAIN (Binary Safe) ---
+            try {
+                if (Module.getBrainData) {
+                    const vec = Module.getBrainData();
+                    const bytes = new Uint8Array(vec.size());
+                    for (let i = 0; i < vec.size(); i++) bytes[i] = vec.get(i);
+                    vec.delete();
+                    
+                    let binary = '';
+                    const len = bytes.byteLength;
+                    for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+                    localStorage.setItem('chess_brain', btoa(binary));
+                }
+            } catch (e) {
+                console.warn("Could not save brain to localStorage:", e);
+            }
+
+            history.push(`${toSquare(move & 63)}-${toSquare((move >> 6) & 63)}`);
+            makeMove(move);
+            selectedSq = null; legalTargets = [];
+            render();
+            
+            document.getElementById("engineStatus").textContent = "AI is thinking...";
+            
+            setTimeout(() => {
+                const cppBoardAfterMove = new Module.VectorInt();
+                for(let i = 0; i < 64; i++) cppBoardAfterMove.push_back(board[i]);
+                
+                const aiIsWhite = (playerColor === "b");
+                
+                if (Module.isCheckmate(cppBoardAfterMove, castling, ep, aiIsWhite)) {
+                    gameOver = true; cppBoardAfterMove.delete(); render();
+                    totalGames++; updateStats();
+                    document.getElementById("statusMsg").textContent = "🎉 Checkmate! You won!";
+                    document.getElementById("engineStatus").textContent = "Game Over";
+                    return;
+                }
+                if (Module.isStalemate(cppBoardAfterMove, castling, ep, aiIsWhite)) {
+                    gameOver = true; cppBoardAfterMove.delete(); render();
+                    totalGames++; updateStats();
+                    document.getElementById("statusMsg").textContent = "🤝 Stalemate! It's a draw.";
+                    document.getElementById("engineStatus").textContent = "Game Over";
+                    return;
+                }
+
+                const bestMove = Module.getBestMove(cppBoardAfterMove, castling, ep, aiIsWhite);
+                cppBoardAfterMove.delete();
+                
+                const nodes = Module.getNodesVisited();
+                document.getElementById("engineNodes").textContent = nodes.toLocaleString();
+                
+                if (bestMove !== -1) {
+                    history.push(`AI: ${toSquare(bestMove & 63)}-${toSquare((bestMove >> 6) & 63)}`);
+                    makeMove(bestMove);
+                    render();
+
+                    const cppBoardAfterAI = new Module.VectorInt();
+                    for(let i = 0; i < 64; i++) cppBoardAfterAI.push_back(board[i]);
+                    
+                    const humanIsWhite = (playerColor === "w");
+                    const isHumanCheckmated = Module.isCheckmate(cppBoardAfterAI, castling, ep, humanIsWhite);
+                    const isHumanStalemated = Module.isStalemate(cppBoardAfterAI, castling, ep, humanIsWhite);
+                    const isDraw = Module.isInsufficientMaterial(cppBoardAfterAI);
+                    cppBoardAfterAI.delete();
+
+                    if (isHumanCheckmated) {
+                        gameOver = true;
+                        totalGames++; updateStats();
+                        document.getElementById("statusMsg").textContent = "💀 Checkmate! AI won!";
+                        document.getElementById("engineStatus").textContent = "Game Over";
+                    } else if (isHumanStalemated) {
+                        gameOver = true;
+                        totalGames++; updateStats();
+                        document.getElementById("statusMsg").textContent = "🤝 Stalemate! It's a draw.";
+                        document.getElementById("engineStatus").textContent = "Game Over";
+                    } else if (isDraw) {
+                        gameOver = true;
+                        totalGames++; updateStats();
+                        document.getElementById("statusMsg").textContent = "🤝 Draw by insufficient material.";
+                        document.getElementById("engineStatus").textContent = "Game Over";
+                    } else {
+                        document.getElementById("engineStatus").textContent = "Your Turn";
+                    }
+                }
+            }, 800);
+            
+        } catch (error) {
+            console.error("Chess Engine Error:", error);
+            document.getElementById("engineStatus").textContent = "Engine Error";
+        }
+    }
+
+    // --- Brain Management ---
+    window.downloadBrain = function() {
+        const savedBrain = localStorage.getItem('chess_brain');
+        if (!savedBrain) {
+            alert("No brain saved yet! Play a few moves first to train it.");
+            return;
+        }
+        
+        const binaryString = atob(savedBrain);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        
+        const blob = new Blob([bytes], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'chess_brain.bin';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    window.triggerUpload = function() {
+        document.getElementById('brainUpload').click();
+    };
+
+    window.handleFileUpload = function(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const arrayBuffer = e.target.result;
+            const bytes = new Uint8Array(arrayBuffer);
+            
+            let binary = '';
+            const len = bytes.byteLength;
+            for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+            
+            try {
+                localStorage.setItem('chess_brain', btoa(binary));
+                
+                if (Module && Module.loadBrainData) {
+                    const vec = new Module.VectorUint8();
+                    for (let i = 0; i < bytes.length; i++) vec.push_back(bytes[i]);
+                    Module.loadBrainData(vec);
+                    vec.delete();
+                    alert("🎉 AI Brain uploaded and loaded successfully!");
+                    resetGame(); 
+                } else {
+                    location.reload();
+                }
+            } catch (err) {
+                console.error(err);
+                alert("❌ Error: Invalid brain file.");
+            }
+        };
+        reader.readAsArrayBuffer(file);
+        event.target.value = '';
+    };
+
+    window.wipeBrain = function() {
+        if (confirm("Are you sure you want to delete the AI's memory?")) {
+            localStorage.removeItem('chess_brain');
+            localStorage.setItem('chess_stats_moves', 0);
+            localStorage.setItem('chess_stats_games', 0);
+            location.reload();
+        }
+    };
+
+    window.setPlayerColor = function(color) {
+        playerColor = color;
+        document.getElementById("btnW").className = playerColor === "w" ? "active" : "";
+        document.getElementById("btnB").className = playerColor === "b" ? "active" : "";
+        resetGame();
+    };
+
+    window.resetGame = function() {
+        gameOver = false;
+        initBoard();
+        selectedSq = null; legalTargets = []; history = [];
+        document.getElementById("engineNodes").textContent = "0";
+        document.getElementById("statusMsg").textContent = "";
+        render();
+        
+        if (playerColor === "b") {
+            document.getElementById("engineStatus").textContent = "AI is thinking...";
+            setTimeout(() => {
+                const cppBoard = new Module.VectorInt();
+                for(let i = 0; i < 64; i++) cppBoard.push_back(board[i]);
+                const bestMove = Module.getBestMove(cppBoard, castling, ep, true);
+                cppBoard.delete();
+                
+                if (bestMove !== -1) {
+                    history.push(`AI: ${toSquare(bestMove & 63)}-${toSquare((bestMove >> 6) & 63)}`);
+                    makeMove(bestMove);
+                    render();
+                }
+                document.getElementById("engineStatus").textContent = "Your Turn";
+            }, 800);
+        } else {
+            document.getElementById("engineStatus").textContent = "Your Turn";
+        }
+    }
+
+    window.onload = function() {
+        updateStats();
+        
+        createChessModule().then(mod => {
+            Module = mod;
+            
+            try {
+                const savedBrain = localStorage.getItem('chess_brain');
+                if (savedBrain && Module.loadBrainData) {
+                    const binaryString = atob(savedBrain);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    const vec = new Module.VectorUint8();
+                    for (let i = 0; i < bytes.length; i++) vec.push_back(bytes[i]);
+                    Module.loadBrainData(vec);
+                    vec.delete();
+                    console.log("AI Brain successfully loaded!");
+                }
+            } catch (e) {
+                console.warn("Could not load saved brain.", e);
+            }
+            
+            resetGame();
+        }).catch(err => {
+            console.error("WASM Load Error:", err);
+            document.getElementById("engineStatus").textContent = "Error loading engine";
+        });
+    };
+</script>
+</body>
+</html>
